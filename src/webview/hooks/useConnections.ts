@@ -2,12 +2,18 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { DbConnectionConfig, CrawlProgress, IndexStats } from "../../shared/types";
 import { postMessage, onMessage } from "../vscodeApi";
 
+/** Result of an add-connection attempt (test then add). */
+export type AddConnectionResult = { success: boolean; error?: string } | null;
+
 /** Return type of useConnections: connection list, crawl state, index stats, and actions. */
 interface UseConnectionsReturn {
   connections: DbConnectionConfig[];
   crawledConnectionIds: string[];
   crawlProgress: CrawlProgress | null;
   addConnection: (config: DbConnectionConfig & { password: string }) => void;
+  addConnectionPending: boolean;
+  addConnectionResult: AddConnectionResult;
+  clearAddConnectionResult: () => void;
   removeConnection: (id: string) => void;
   testConnection: (id: string) => void;
   crawlSchema: (id: string) => void;
@@ -31,6 +37,8 @@ export function useConnections(): UseConnectionsReturn {
   const [connections, setConnections] = useState<DbConnectionConfig[]>([]);
   const [crawledConnectionIds, setCrawledConnectionIds] = useState<string[]>([]);
   const [crawlProgress, setCrawlProgress] = useState<CrawlProgress | null>(null);
+  const [addConnectionPending, setAddConnectionPending] = useState(false);
+  const [addConnectionResult, setAddConnectionResult] = useState<AddConnectionResult>(null);
   const [indexStats, setIndexStats] = useState<IndexStats | null>(null);
   const [indexStatsRequestedId, setIndexStatsRequestedId] = useState<string | null>(null);
   const indexStatsRequestedIdRef = useRef<string | null>(null);
@@ -45,6 +53,10 @@ export function useConnections(): UseConnectionsReturn {
           break;
         case "CONNECTION_ADDED":
           setConnections((prev) => [...prev, message.payload]);
+          break;
+        case "ADD_CONNECTION_RESULT":
+          setAddConnectionResult(message.payload);
+          setAddConnectionPending(false);
           break;
         case "CONNECTION_REMOVED":
           setConnections((prev) => prev.filter((c) => c.id !== message.payload.id));
@@ -75,7 +87,13 @@ export function useConnections(): UseConnectionsReturn {
   }, []);
 
   const addConnection = useCallback((config: DbConnectionConfig & { password: string }) => {
+    setAddConnectionResult(null);
+    setAddConnectionPending(true);
     postMessage({ type: "ADD_CONNECTION", payload: config });
+  }, []);
+
+  const clearAddConnectionResult = useCallback(() => {
+    setAddConnectionResult(null);
   }, []);
 
   const removeConnection = useCallback((id: string) => {
@@ -114,6 +132,9 @@ export function useConnections(): UseConnectionsReturn {
     crawledConnectionIds,
     crawlProgress,
     addConnection,
+    addConnectionPending,
+    addConnectionResult,
+    clearAddConnectionResult,
     removeConnection,
     testConnection,
     crawlSchema,
