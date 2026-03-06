@@ -5,7 +5,7 @@ import { MysqlDriver } from "./MysqlDriver";
 
 /**
  * Returns the appropriate driver instance for the given DB type.
- * Single place for driver selection — used by ConnectionManager and SchemaService.
+ * Single place for driver selection — used by ConnectionRepository and SchemaRepository.
  *
  * @param driver Database driver key: "mssql" | "postgres" | "mysql".
  * @returns An IDbDriver implementation for the given type.

@@ -2,7 +2,7 @@
 export type DbDriver = "mssql" | "postgres" | "mysql";
 
 /**
- * Implemented by each DB driver; used by ConnectionManager and SchemaService.
+ * Implemented by each DB driver; used by ConnectionRepository and SchemaRepository.
  * Each operation uses its own connection; no long-lived pool in the driver.
  */
 export interface IDbDriver {
@@ -112,6 +112,9 @@ export type WebviewToExtensionMessage =
   | { type: "CRAWL_SCHEMA"; payload: { id: string } }
   | { type: "CRAWL_CANCEL"; payload: { connectionId: string } }
   | { type: "GET_OLLAMA_STATUS" }
+  | { type: "GET_OLLAMA_MODELS" }
+  | { type: "SET_OLLAMA_MODEL"; payload: { model: string } }
+  | { type: "PULL_MODEL"; payload: { model: string } }
   | {
       type: "CHAT";
       payload: {
@@ -128,7 +131,16 @@ export type WebviewToExtensionMessage =
 /** Messages sent from the extension to the webview. */
 export type ExtensionToWebviewMessage =
   | { type: "CONNECTIONS_LIST"; payload: DbConnectionConfig[] }
-  | { type: "OLLAMA_STATUS"; payload: { available: boolean; model?: string; modelPulled?: boolean } }
+  |     {
+      type: "OLLAMA_STATUS";
+      payload: {
+        available: boolean;
+        model?: string;
+        modelPulled?: boolean;
+      };
+    }
+  | { type: "PULL_STARTED"; payload: { model: string } }
+  | { type: "OLLAMA_MODELS"; payload: { models: string[] } }
   | { type: "CONNECTION_ADDED"; payload: DbConnectionConfig }
   | { type: "ADD_CONNECTION_RESULT"; payload: { success: boolean; error?: string } }
   | { type: "CONNECTION_REMOVED"; payload: { id: string } }

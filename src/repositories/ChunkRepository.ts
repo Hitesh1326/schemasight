@@ -8,22 +8,20 @@ import type { SchemaChunk, IndexStats } from "../shared/types";
 const CHUNKS_TABLE_PREFIX = "chunks_";
 const EMBEDDING_COLUMN = "embedding";
 const CONTENT_COLUMN = "content";
-/** Minimum rows required by LanceDB to train the IVF-PQ vector index. */
 const MIN_ROWS_FOR_VECTOR_INDEX = 256;
 
 /**
- * Options for hybrid search (full-text + vector with RRF rerank).
+ * Options for hybrid (vector + FTS) search over schema chunks.
  */
 export interface SearchOptions {
-  /** Maximum number of results to return after rerank. */
+  /** Maximum number of chunks to return (after reranking). */
   topK: number;
-  /** Query text for full-text + vector hybrid search. Required. */
+  /** Natural language or keyword query (used for full-text and reranking). */
   queryText: string;
-  /** Pre-filter by object type (e.g. only tables or only stored procedures). */
+  /** Optional filter by object type (table, view, stored_procedure, function). */
   typeFilter?: SchemaChunk["objectType"];
 }
 
-/** Allowed objectType values for typeFilter (used to build a safe WHERE clause). */
 const ALLOWED_OBJECT_TYPES = new Set<SchemaChunk["objectType"]>([
   "table",
   "view",
@@ -31,11 +29,6 @@ const ALLOWED_OBJECT_TYPES = new Set<SchemaChunk["objectType"]>([
   "function",
 ]);
 
-/**
- * Converts a LanceDB row (Record) to a SchemaChunk.
- * @param row Raw row from table.query() or vectorSearch().
- * @returns SchemaChunk with embedding as number[] (LanceDB may return Float32Array).
- */
 function rowToChunk(row: Record<string, unknown>): SchemaChunk {
   return {
     id: row.id as string,
@@ -50,22 +43,11 @@ function rowToChunk(row: Record<string, unknown>): SchemaChunk {
   };
 }
 
-/**
- * Sanitizes connectionId for use as a LanceDB table name (alphanumeric, underscore, hyphen).
- * @param connectionId Connection id (may contain characters invalid in table names).
- * @returns Table name prefix + sanitized id (e.g. chunks_conn_123).
- */
 function tableNameFor(connectionId: string): string {
   const safe = connectionId.replace(/[^a-zA-Z0-9_-]/g, "_");
   return `${CHUNKS_TABLE_PREFIX}${safe}`;
 }
 
-/**
- * Builds Arrow schema for the chunks table with embedding as a vector column (FixedSizeList of Float32).
- * LanceDB requires this for vectorSearch; plain List inferred from number[] is not sufficient.
- * @param embeddingDimension Length of each embedding vector (e.g. 384 for MiniLM).
- * @returns Arrow Schema for the chunks table.
- */
 function buildChunksSchema(embeddingDimension: number): Schema {
   return new Schema([
     new Field("id", new Utf8(), true),
@@ -80,12 +62,6 @@ function buildChunksSchema(embeddingDimension: number): Schema {
   ]);
 }
 
-/**
- * Computes per-type counts, summary/embedding coverage, and latest crawledAt from raw rows.
- * Used by getIndexStats (totalChunks comes from table.countRows() separately).
- * @param rows Raw rows with objectType, summary, embedding, crawledAt.
- * @returns Partial IndexStats (without totalChunks).
- */
 function computeStatsFromRows(
   rows: Record<string, unknown>[]
 ): Omit<IndexStats, "totalChunks"> {
@@ -126,27 +102,25 @@ function computeStatsFromRows(
 }
 
 /**
- * Manages the LanceDB vector store for schema chunks.
- * Each connection has its own table (chunks_<sanitized-connectionId>). Uses cosine distance
- * for normalized embeddings; supports vector search, FTS (BM25), and hybrid search with RRF rerank.
+ * Repository for schema chunks and vector search (LanceDB).
+ * Stores one table per connection (`chunks_<connectionId>`); supports hybrid search
+ * (embedding + full-text) with RRF reranking, and index stats/clear/list.
  */
-export class VectorStoreManager {
+export class ChunkRepository {
   private conn: Connection | null = null;
   private initPromise: Promise<Connection> | null = null;
   private rrfrerankerPromise: Promise<InstanceType<typeof lancedb.rerankers.RRFReranker>> | null = null;
 
   /**
-   * @param storageUri Base directory for extension storage (LanceDB created here unless overridden by config).
+   * @param storageUri - Base URI for extension storage; LanceDB path is configurable via `schemasight.lanceDbPath` or defaults to `<storageUri>/lancedb`.
    */
   constructor(private readonly storageUri: vscode.Uri) {}
 
-  /** LanceDB root path: from config (schemasight.lanceDbPath) or storageUri/lancedb. */
   private get dbPath(): string {
     const configPath = vscode.workspace.getConfiguration("schemasight").get<string>("lanceDbPath");
     return configPath?.trim() || path.join(this.storageUri.fsPath, "lancedb");
   }
 
-  /** Returns the LanceDB connection; connects on first call (lazy init). */
   private async getConnection(): Promise<Connection> {
     if (this.conn) return this.conn;
     if (this.initPromise) return this.initPromise;
@@ -156,18 +130,18 @@ export class VectorStoreManager {
     return this.conn;
   }
 
-  /** Ensures the LanceDB connection is open (e.g. at extension activation). */
+  /**
+   * Ensures the LanceDB connection is open. Call once at startup or before first use.
+   */
   async initialize(): Promise<void> {
     await this.getConnection();
   }
 
   /**
-   * Replaces all chunks for a connection with the given chunks (overwrite).
-   * Drops the existing table if present, creates a new one with an explicit Arrow schema
-   * (embedding as FixedSizeList of Float32), and creates vector + FTS indexes when applicable.
-   * @param connectionId Connection id (used for table name and chunk.connectionId).
-   * @param chunks Chunks to store (must have embedding populated).
-   * @returns Resolves when the table and indexes are created; no-op if chunks is empty.
+   * Replaces all chunks for a connection: drops existing table, creates new one with the given chunks,
+   * builds vector index (if enough rows) and FTS index on content.
+   * @param connectionId - Connection id (used as table name suffix).
+   * @param chunks - Chunks to store (must include embeddings; summary and content required).
    */
   async upsertChunks(connectionId: string, chunks: SchemaChunk[]): Promise<void> {
     if (chunks.length === 0) return;
@@ -205,11 +179,10 @@ export class VectorStoreManager {
   }
 
   /**
-   * Returns all chunks for a connection (no vector search). Use when the model needs
-   * the full schema (e.g. "list all tables", "how many tables").
-   * @param connectionId Connection id.
-   * @param limit Maximum rows to return (default 500).
-   * @returns Array of SchemaChunk; empty if the table does not exist.
+   * Returns stored chunks for a connection (no vector search).
+   * @param connectionId - Connection id.
+   * @param limit - Max rows to return (default 500).
+   * @returns List of chunks; empty if no index for this connection.
    */
   async getAllChunks(connectionId: string, limit = 500): Promise<SchemaChunk[]> {
     const ctx = await this.getTableIfExists(connectionId);
@@ -219,11 +192,12 @@ export class VectorStoreManager {
   }
 
   /**
-   * Hybrid search: LanceDB full-text on query text + vector similarity, merged with RRF reranker.
-   * @param connectionId Connection id.
-   * @param queryEmbedding Query vector (same dimension as stored embeddings).
-   * @param options topK, queryText (required), optional typeFilter.
-   * @returns Top-k chunks; empty if the table does not exist.
+   * Hybrid search: full-text on content + vector similarity, reranked with RRF.
+   * @param connectionId - Connection id.
+   * @param queryEmbedding - Query vector (same dimension as stored embeddings).
+   * @param options - topK, queryText, optional typeFilter.
+   * @returns Chunks ordered by relevance (up to topK).
+   * @throws {Error} If `options.queryText` is empty.
    */
   async search(
     connectionId: string,
@@ -242,7 +216,7 @@ export class VectorStoreManager {
     const { table } = ctx;
     const whereClause =
       typeFilter != null && ALLOWED_OBJECT_TYPES.has(typeFilter)
-        ? `objectType = '${typeFilter}'`
+        ? `"objectType" = '${typeFilter}'`
         : undefined;
 
     if (!this.rrfrerankerPromise) {
@@ -263,8 +237,39 @@ export class VectorStoreManager {
   }
 
   /**
-   * Removes the index for a connection (drops the chunks table).
-   * @param connectionId Connection id.
+   * Finds a single chunk by object name (schema-qualified or bare).
+   * @param connectionId - Connection id.
+   * @param name - Object name (e.g. "dbo.MyTable" or "MyTable"); special chars stripped.
+   * @returns The matching chunk or null.
+   */
+  async findByName(connectionId: string, name: string): Promise<SchemaChunk | null> {
+    const sanitized = name.trim().replace(/[^a-zA-Z0-9_.]/g, "");
+    if (sanitized.length === 0) return null;
+    const ctx = await this.getTableIfExists(connectionId);
+    if (!ctx) return null;
+    if (sanitized.includes(".")) {
+      const whereClause = `"objectName" = '${sanitized}'`;
+      const results = await ctx.table.query().where(whereClause).limit(1).toArray();
+      const row = (results as Record<string, unknown>[])[0];
+      return row ? rowToChunk(row) : null;
+    }
+    const all = await ctx.table.query().limit(500).toArray();
+    const rows = all as Record<string, unknown>[];
+    const lower = sanitized.toLowerCase();
+    const match = rows.find((r) => {
+      const on = String(r.objectName);
+      return (
+        on === sanitized ||
+        on.toLowerCase() === lower ||
+        on.toLowerCase().endsWith("." + lower)
+      );
+    });
+    return match ? rowToChunk(match) : null;
+  }
+
+  /**
+   * Deletes the chunk table for a connection (all chunks removed).
+   * @param connectionId - Connection id.
    */
   async clearIndex(connectionId: string): Promise<void> {
     const ctx = await this.getTableIfExists(connectionId);
@@ -273,9 +278,8 @@ export class VectorStoreManager {
   }
 
   /**
-   * Lists connection ids that have at least one chunk (tables starting with chunks_).
-   * Returns the sanitized table suffix (not the original connectionId); use for presence check.
-   * @returns Array of sanitized connection ids that have a chunks table.
+   * Returns connection ids that have at least one chunk table.
+   * @returns Array of connection ids derived from table names.
    */
   async listIndexedConnections(): Promise<string[]> {
     const db = await this.getConnection();
@@ -287,9 +291,9 @@ export class VectorStoreManager {
   }
 
   /**
-   * Returns aggregate stats for a connection's index (counts by type, summary/embedding coverage, last crawl).
-   * @param connectionId Connection id.
-   * @returns IndexStats or null if the table does not exist.
+   * Returns aggregate stats for the connection's chunk table (counts by type, summary/embedding presence, last crawled).
+   * @param connectionId - Connection id.
+   * @returns Stats object or null if no table for this connection.
    */
   async getIndexStats(connectionId: string): Promise<IndexStats | null> {
     const ctx = await this.getTableIfExists(connectionId);
@@ -306,11 +310,6 @@ export class VectorStoreManager {
     return { totalChunks, ...partial };
   }
 
-  /**
-   * Opens the chunks table for a connection if it exists.
-   * @param connectionId Connection id.
-   * @returns Context with db, tableName, and opened table, or null if the table does not exist.
-   */
   private async getTableIfExists(
     connectionId: string
   ): Promise<{ db: Connection; tableName: string; table: Awaited<ReturnType<Connection["openTable"]>> } | null> {

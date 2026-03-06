@@ -1,35 +1,42 @@
 import * as vscode from "vscode";
 import { registerCommands } from "./commands";
 import { PanelManager } from "./webview/PanelManager";
-import { ConnectionManager } from "./db/ConnectionManager";
-import { SchemaService } from "./db/SchemaService";
-import { VectorStoreManager } from "./vectorstore/VectorStoreManager";
-import { EmbeddingService } from "./embeddings/EmbeddingService";
-import { OllamaService } from "./llm/OllamaService";
+import { ConnectionRepository } from "./repositories/ConnectionRepository";
+import { SchemaRepository } from "./repositories/SchemaRepository";
+import { ChunkRepository } from "./repositories/ChunkRepository";
+import { OllamaRepository } from "./repositories/OllamaRepository";
+import { EmbeddingRepository } from "./repositories/EmbeddingRepository";
 import { PromptBuilder } from "./llm/PromptBuilder";
-import { Indexer } from "./vectorstore/Indexer";
+import { RagPipelineService } from "./services/rag/RagPipelineService";
+import { Indexer } from "./services/indexing/Indexer";
 
-/**
- * Extension entry point. Wires ConnectionManager, SchemaService, OllamaService, EmbeddingService,
- * VectorStoreManager, Indexer, and PanelManager; registers commands and the sidebar webview provider.
- * @param context - VS Code extension context (globalState, secrets, subscriptions, etc.).
- */
 export function activate(context: vscode.ExtensionContext): void {
-  const connectionManager = new ConnectionManager(context.globalState, context.secrets);
-  const schemaService = new SchemaService();
-  const ollamaService = new OllamaService();
-  const embeddingService = new EmbeddingService();
-  void embeddingService.initialize();
-  const vectorStoreManager = new VectorStoreManager(context.globalStorageUri);
+  const connectionRepository = new ConnectionRepository(context.globalState, context.secrets);
+  const schemaRepository = new SchemaRepository();
+  const chunkRepository = new ChunkRepository(context.globalStorageUri);
+  const ollamaRepository = new OllamaRepository();
+  const embeddingRepository = new EmbeddingRepository();
+  void embeddingRepository.initialize();
   const promptBuilder = new PromptBuilder();
-  const indexer = new Indexer(ollamaService, promptBuilder, embeddingService, vectorStoreManager);
-  const panelManager = new PanelManager(context, {
-    connectionManager,
-    schemaService,
-    ollamaService,
+  const ragPipelineService = new RagPipelineService(
+    ollamaRepository,
     promptBuilder,
-    embeddingService,
-    vectorStoreManager,
+    embeddingRepository,
+    chunkRepository
+  );
+  const indexer = new Indexer(
+    ollamaRepository,
+    promptBuilder,
+    embeddingRepository,
+    chunkRepository
+  );
+  const panelManager = new PanelManager(context, {
+    connectionRepository,
+    schemaRepository,
+    chunkRepository,
+    ollamaRepository,
+    promptBuilder,
+    ragPipelineService,
     indexer,
   });
 

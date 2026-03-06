@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { DbConnectionConfig } from "../shared/types";
-import { getDriver } from "./drivers";
+import { getDriver } from "../db/drivers";
 import { logger } from "../utils/logger";
 
 const CONNECTIONS_KEY = "schemasight.connections";
@@ -8,13 +8,15 @@ const CRAWLED_IDS_KEY = "schemasight.crawledConnectionIds";
 const PASSWORD_KEY_PREFIX = "schemasight.password.";
 
 /**
- * Persists connection configs in VS Code globalState.
- * Passwords are stored separately in VS Code SecretStorage.
+ * Repository for database connection configuration and credentials.
+ * Persists connection configs in VS Code globalState; passwords are stored in SecretStorage.
+ * @see {@link https://code.visualstudio.com/api/references/vscode-api#Memento Memento}
+ * @see {@link https://code.visualstudio.com/api/references/vscode-api#SecretStorage SecretStorage}
  */
-export class ConnectionManager {
+export class ConnectionRepository {
   /**
-   * @param globalState VS Code Memento for persisting connection list and crawled-connection IDs.
-   * @param secrets VS Code SecretStorage for persisting passwords per connection.
+   * @param globalState - VS Code Memento for extension-scoped key/value storage.
+   * @param secrets - VS Code SecretStorage for storing connection passwords.
    */
   constructor(
     private readonly globalState: vscode.Memento,
@@ -22,8 +24,8 @@ export class ConnectionManager {
   ) {}
 
   /**
-   * Returns all saved connection configs (without passwords).
-   * @returns Array of connection configs; empty array if none saved.
+   * Returns all stored connection configs (without passwords).
+   * @returns List of connection configs; empty array if none stored.
    */
   async getAll(): Promise<DbConnectionConfig[]> {
     const raw = this.globalState.get<DbConnectionConfig[]>(CONNECTIONS_KEY);
@@ -32,9 +34,9 @@ export class ConnectionManager {
 
   /**
    * Adds a new connection and stores its password in SecretStorage.
-   * @param config Connection config (id, label, driver, host, port, database, username, useSsl).
-   * @param password Password to store for this connection.
-   * @throws Error if a connection with the same id already exists.
+   * @param config - Connection configuration (driver, host, port, database, label, id).
+   * @param password - Password to store; not included in config.
+   * @throws {Error} If a connection with the same `config.id` already exists.
    */
   async add(config: DbConnectionConfig, password: string): Promise<void> {
     const list = await this.getAll();
@@ -47,8 +49,8 @@ export class ConnectionManager {
   }
 
   /**
-   * Removes a connection and its stored password; also removes it from crawled-connection IDs.
-   * @param id Connection id to remove.
+   * Removes a connection and its stored password; also removes it from crawled IDs.
+   * @param id - Connection id to remove.
    */
   async remove(id: string): Promise<void> {
     const list = (await this.getAll()).filter((c) => c.id !== id);
@@ -58,8 +60,8 @@ export class ConnectionManager {
   }
 
   /**
-   * Returns the list of connection ids that have been crawled/indexed.
-   * @returns Array of connection ids; empty array if none.
+   * Returns connection ids that have been crawled and indexed.
+   * @returns Array of connection ids.
    */
   async getCrawledConnectionIds(): Promise<string[]> {
     const raw = this.globalState.get<string[]>(CRAWLED_IDS_KEY);
@@ -67,8 +69,8 @@ export class ConnectionManager {
   }
 
   /**
-   * Marks a connection as crawled (indexed). Idempotent if already present.
-   * @param id Connection id that was crawled.
+   * Marks a connection as crawled (idempotent).
+   * @param id - Connection id to mark.
    */
   async addCrawledConnectionId(id: string): Promise<void> {
     const ids = await this.getCrawledConnectionIds();
@@ -77,8 +79,8 @@ export class ConnectionManager {
   }
 
   /**
-   * Removes a connection from the crawled list (e.g. after connection removal).
-   * @param id Connection id to remove from crawled list.
+   * Removes a connection from the crawled set.
+   * @param id - Connection id to remove.
    */
   async removeCrawledConnectionId(id: string): Promise<void> {
     const ids = (await this.getCrawledConnectionIds()).filter((x) => x !== id);
@@ -87,17 +89,17 @@ export class ConnectionManager {
 
   /**
    * Retrieves the stored password for a connection.
-   * @param id Connection id.
-   * @returns The password, or undefined if not stored.
+   * @param id - Connection id.
+   * @returns The password, or `undefined` if not stored.
    */
   async getPassword(id: string): Promise<string | undefined> {
     return this.secrets.get(`${PASSWORD_KEY_PREFIX}${id}`);
   }
 
   /**
-   * Returns the connection config for the given id.
-   * @param id Connection id.
-   * @returns The config, or undefined if not found.
+   * Looks up a connection config by id.
+   * @param id - Connection id.
+   * @returns The config or `undefined` if not found.
    */
   async getById(id: string): Promise<DbConnectionConfig | undefined> {
     const list = await this.getAll();
@@ -105,10 +107,10 @@ export class ConnectionManager {
   }
 
   /**
-   * Tests connectivity for a connection config (e.g. before adding). Does not require the config to be stored.
-   * @param config Connection config to test.
-   * @param password Password for the connection.
-   * @returns { success: true } on success, or { success: false, error } on failure.
+   * Tests connectivity using the given config and password (does not use stored state).
+   * @param config - Connection config to test.
+   * @param password - Password to use.
+   * @returns `{ success: true }` or `{ success: false, error: string }`.
    */
   async testConnectionConfig(config: DbConnectionConfig, password: string): Promise<{ success: boolean; error?: string }> {
     const driver = getDriver(config.driver);
@@ -124,9 +126,9 @@ export class ConnectionManager {
   }
 
   /**
-   * Tests connectivity for a connection using its driver (no schema crawl).
-   * @param id Connection id (must exist and have a stored password).
-   * @returns { success: true } on success, or { success: false, error } on failure (not found, no password, or driver error).
+   * Tests connectivity for a stored connection (loads config and password by id).
+   * @param id - Stored connection id.
+   * @returns `{ success: true }` or `{ success: false, error: string }` (e.g. "Connection not found", "Password not found").
    */
   async testConnection(id: string): Promise<{ success: boolean; error?: string }> {
     const config = await this.getById(id);

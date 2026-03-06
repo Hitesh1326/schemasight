@@ -1,9 +1,10 @@
 {
   "name": "schemasight",
   "displayName": "SchemaSight",
-  "description": "Chat with your database. Locally. Instantly.",
+  "description": "Understand database schemas and stored procedures in VS Code with local AI.",
   "version": "0.0.1",
   "publisher": "schemasight",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -15,15 +16,21 @@
   "keywords": [
     "sql",
     "database",
+    "schema",
+    "stored procedures",
+    "database documentation",
+    "database onboarding",
     "ollama",
     "llm",
     "lancedb",
     "postgresql",
     "mysql",
     "sql server",
-    "local ai"
+    "mssql",
+    "local ai",
+    "local-first"
   ],
-  "icon": "assets/icon.png",
+  "icon": "assets/icon-mono.svg",
   "activationEvents": [
     "onCommand:schemasight.openPanel",
     "onView:schemasight-sidebar"
@@ -70,7 +77,7 @@
         "schemasight.ollamaModel": {
           "type": "string",
           "default": "llama3.1:8b",
-          "description": "Ollama model for summarization and chat. Pull it first, e.g. ollama pull llama3.1:8b"
+          "description": "Ollama model used for indexing and chat. Set in the app when you choose a model before crawling; we recommend llama3.1:8b. Smaller models may give faster indexing but worse or incorrect answers."
         },
         "schemasight.embeddingModel": {
           "type": "string",

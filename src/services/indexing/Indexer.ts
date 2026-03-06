@@ -8,47 +8,42 @@ import {
   StoredProcedureMeta,
   FunctionMeta,
   SpParameterMeta,
-} from "../shared/types";
-import { OllamaService } from "../llm/OllamaService";
-import { PromptBuilder } from "../llm/PromptBuilder";
-import { EmbeddingService } from "../embeddings/EmbeddingService";
-import { VectorStoreManager } from "./VectorStoreManager";
+} from "../../shared/types";
+import type { OllamaRepository } from "../../repositories/OllamaRepository";
+import type { PromptBuilder } from "../../llm/PromptBuilder";
+import type { EmbeddingRepository } from "../../repositories/EmbeddingRepository";
+import type { ChunkRepository } from "../../repositories/ChunkRepository";
 
-/** Callback invoked with crawl/index progress (phase, current, total, currentObject). */
 type ProgressCallback = (progress: CrawlProgress) => void;
 
-/** Max concurrent Ollama summarization calls during indexing. */
 const SUMMARIZE_CONCURRENCY = 5;
-
-/** Embedding batch size to avoid overloading the embedding model. */
 const EMBED_BATCH_SIZE = 32;
 
 /**
  * Orchestrates the indexing pipeline: schema → chunks → summarize (Ollama) → embed → store.
- * Builds one chunk per table, view, stored procedure, and function; summarizes with limited
- * concurrency; embeds in batches; upserts into the vector store. Reports progress for UI.
+ * Builds one chunk per table, view, stored procedure, and function; summarizes with limited concurrency;
+ * embeds in batches; upserts into the chunk repository. Reports progress for UI and respects AbortSignal.
  */
 export class Indexer {
   /**
-   * @param ollamaService Used to summarize chunk content for semantic search.
-   * @param promptBuilder Builds summarization prompts (object type, name, content).
-   * @param embeddingService Generates embeddings from summaries (batch).
-   * @param vectorStore Persists chunks and vectors (LanceDB).
+   * @param ollamaRepository - For summarizing chunk content.
+   * @param promptBuilder - For buildSummarizationPrompt (object type, name, content).
+   * @param embeddingRepository - For embedBatch on chunk summaries.
+   * @param chunkRepository - For upsertChunks (persists chunks and builds vector/FTS indexes).
    */
   constructor(
-    private readonly ollamaService: OllamaService,
+    private readonly ollamaRepository: OllamaRepository,
     private readonly promptBuilder: PromptBuilder,
-    private readonly embeddingService: EmbeddingService,
-    private readonly vectorStore: VectorStoreManager
+    private readonly embeddingRepository: EmbeddingRepository,
+    private readonly chunkRepository: ChunkRepository
   ) {}
 
   /**
    * Indexes a full database schema: builds chunks, summarizes via Ollama, embeds, and upserts.
-   * Progress is reported for each phase (summarizing, embedding, storing). Respects signal for cancellation.
-   * @param schema Crawled schema (tables, views, stored procedures, functions).
-   * @param onProgress Callback for progress updates (phase, current, total, currentObject).
-   * @param signal Optional AbortSignal; when aborted, throws DOMException with name "AbortError".
-   * @returns Resolves when all chunks are stored; rejects on driver error or when signal is aborted.
+   * Progress is reported for each phase (summarizing, embedding, storing). Cancellation via signal throws AbortError.
+   * @param schema - Crawled schema (tables, views, stored procedures, functions).
+   * @param onProgress - Callback for progress updates (phase, current, total, currentObject).
+   * @param signal - Optional AbortSignal; when aborted, throws DOMException with name "AbortError".
    */
   async index(schema: DatabaseSchema, onProgress: ProgressCallback, signal?: AbortSignal): Promise<void> {
     const throwIfAborted = () => {
@@ -61,20 +56,14 @@ export class Indexer {
       return;
     }
 
-    await this.summarizeChunks(chunks, schema.connectionId, onProgress, throwIfAborted);
+    await this.summarizeChunks(chunks, schema.connectionId, onProgress, signal);
     await this.embedChunks(chunks, schema.connectionId, onProgress, throwIfAborted);
 
     throwIfAborted();
     onProgress({ connectionId: schema.connectionId, phase: "storing", current: 1, total: 1 });
-    await this.vectorStore.upsertChunks(schema.connectionId, chunks);
+    await this.chunkRepository.upsertChunks(schema.connectionId, chunks);
   }
 
-  /**
-   * Builds raw schema chunks from a crawled schema (one per table, view, procedure, function).
-   * Chunks have no summary or embedding yet.
-   * @param schema Crawled database schema.
-   * @returns Array of SchemaChunk (summary and embedding filled by later phases).
-   */
   private buildChunksFromSchema(schema: DatabaseSchema): SchemaChunk[] {
     const { connectionId, crawledAt } = schema;
     const chunks: SchemaChunk[] = [];
@@ -93,19 +82,15 @@ export class Indexer {
     return chunks;
   }
 
-  /**
-   * Summarizes all chunks via Ollama with limited concurrency; mutates chunk.summary in place.
-   * @param chunks Chunks to summarize (content already set).
-   * @param connectionId Connection id for progress.
-   * @param onProgress Progress callback.
-   * @param throwIfAborted Abort check (called before each unit of work).
-   */
   private async summarizeChunks(
     chunks: SchemaChunk[],
     connectionId: string,
     onProgress: ProgressCallback,
-    throwIfAborted: () => void
+    signal?: AbortSignal
   ): Promise<void> {
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new DOMException("Crawl cancelled", "AbortError");
+    };
     const total = chunks.length;
     let completed = 0;
     const summarizeOne = async (i: number): Promise<void> => {
@@ -116,7 +101,7 @@ export class Indexer {
         `${chunk.schema}.${chunk.objectName}`,
         chunk.content
       );
-      chunk.summary = await this.ollamaService.summarize(prompt);
+      chunk.summary = await this.ollamaRepository.summarize(prompt, signal);
       completed++;
       onProgress({
         connectionId,
@@ -138,13 +123,6 @@ export class Indexer {
     await Promise.all(Array.from({ length: workers }, () => runWorker()));
   }
 
-  /**
-   * Embeds all chunk summaries in batches; mutates chunk.embedding in place.
-   * @param chunks Chunks with summary set (embedding filled here).
-   * @param connectionId Connection id for progress.
-   * @param onProgress Progress callback.
-   * @param throwIfAborted Abort check (called before each batch).
-   */
   private async embedChunks(
     chunks: SchemaChunk[],
     connectionId: string,
@@ -163,23 +141,13 @@ export class Indexer {
       });
       const batch = chunks.slice(offset, offset + EMBED_BATCH_SIZE);
       const summaries = batch.map((c) => c.summary);
-      const embeddings = await this.embeddingService.embedBatch(summaries);
+      const embeddings = await this.embeddingRepository.embedBatch(summaries);
       batch.forEach((chunk, j) => {
         chunk.embedding = embeddings[j];
       });
     }
   }
 
-  /**
-   * Creates a single schema chunk with id, content, and empty summary/embedding.
-   * @param connectionId Connection id for the chunk.
-   * @param objectType One of table, view, stored_procedure, function.
-   * @param objectName Schema-qualified name (e.g. dbo.MyTable).
-   * @param schema Schema name.
-   * @param content Text content for the chunk.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns A new SchemaChunk (summary and embedding to be filled later).
-   */
   private createChunk(
     connectionId: string,
     objectType: SchemaChunk["objectType"],
@@ -201,13 +169,6 @@ export class Indexer {
     };
   }
 
-  /**
-   * Builds one schema chunk for a table (name, columns with types and PK/FK).
-   * @param connectionId Connection id for the chunk.
-   * @param table Table metadata from the crawl.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns Array of one SchemaChunk (summary and embedding filled later).
-   */
   private chunkTable(
     connectionId: string,
     table: TableMeta,
@@ -227,13 +188,6 @@ export class Indexer {
     return [this.createChunk(connectionId, "table", objectName, table.schema, content, crawledAt)];
   }
 
-  /**
-   * Builds one schema chunk for a view (name, columns, definition).
-   * @param connectionId Connection id for the chunk.
-   * @param view View metadata from the crawl.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns Array of one SchemaChunk (summary and embedding filled later).
-   */
   private chunkView(connectionId: string, view: ViewMeta, crawledAt: string): SchemaChunk[] {
     const colParts = view.columns.map((c) => `${c.name} (${c.dataType}${c.nullable ? ", nullable" : ""})`);
     const content = `View ${view.schema}.${view.name}\nColumns: ${colParts.join("; ")}\n\nDefinition:\n${view.definition}`;
@@ -241,13 +195,6 @@ export class Indexer {
     return [this.createChunk(connectionId, "view", objectName, view.schema, content, crawledAt)];
   }
 
-  /**
-   * Builds one schema chunk for a stored procedure (name, parameters, definition).
-   * @param connectionId Connection id for the chunk.
-   * @param sp Stored procedure metadata from the crawl.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns Array of one SchemaChunk (summary and embedding filled later).
-   */
   private chunkSp(
     connectionId: string,
     sp: StoredProcedureMeta,
@@ -265,13 +212,6 @@ export class Indexer {
     );
   }
 
-  /**
-   * Builds one schema chunk for a function (name, parameters, definition).
-   * @param connectionId Connection id for the chunk.
-   * @param fn Function metadata from the crawl.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns Array of one SchemaChunk (summary and embedding filled later).
-   */
   private chunkFunction(
     connectionId: string,
     fn: FunctionMeta,
@@ -289,18 +229,6 @@ export class Indexer {
     );
   }
 
-  /**
-   * Builds one schema chunk for a stored procedure or function (shared shape: parameters + definition).
-   * @param objectType "stored_procedure" or "function".
-   * @param label Human-readable label for content (e.g. "Stored procedure", "Function").
-   * @param schema Schema name.
-   * @param name Object name.
-   * @param definition DDL or definition text.
-   * @param parameters Parameter list (name, type, direction).
-   * @param connectionId Connection id for the chunk.
-   * @param crawledAt ISO timestamp of the crawl.
-   * @returns Array of one SchemaChunk (summary and embedding filled later).
-   */
   private chunkProcedureLike(
     objectType: "stored_procedure" | "function",
     label: string,

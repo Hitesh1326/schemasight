@@ -1,55 +1,51 @@
 import * as vscode from "vscode";
 import type { ChatMessage } from "../shared/types";
 import { logger } from "../utils/logger";
+import {
+  SUMMARIZE_SYSTEM,
+  QUERY_REWRITE_SYSTEM,
+  CONVERSATION_SUMMARY_SYSTEM,
+} from "../llm/PromptBuilder";
 
 type StreamCallback = (token: string) => void;
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
 const DEFAULT_MODEL = "llama3.1:8b";
 
-const SUMMARIZE_SYSTEM = `Summarize the following database schema or stored procedure text in 1-3 concise sentences suitable for semantic search. Output only the summary, no preamble.`;
-
-const QUERY_REWRITE_SYSTEM = `You are a query rewriter for a database schema search. Given a conversation and the latest user message, output a single standalone search query that captures what the user is asking. Resolve references like "it", "that", "the procedure" using the conversation. Output only the search query, one line, no preamble or explanation.`;
-
-const CONVERSATION_SUMMARY_SYSTEM = `Summarize this conversation in 1-2 short paragraphs. Preserve database object names (tables, procedures, functions, views), key facts the user asked about, and any references the assistant made. The summary will be used as context so later messages can still refer to earlier topics. Output only the summary, no preamble.`;
-
-/** Response shape from GET /api/tags. */
 interface OllamaTagsResponse {
   models?: { name?: string }[];
 }
 
-/** Response shape from POST /api/show (model details). */
 interface OllamaShowResponse {
   parameters?: string;
   model_info?: Record<string, number>;
 }
 
 /**
- * Thin wrapper around the Ollama HTTP API.
- * Uses Node's built-in fetch (Node 18+) — no external HTTP client needed.
+ * Repository for the Ollama HTTP API (local LLM).
+ * Reads base URL and model from VS Code config (`schemasight.ollamaBaseUrl`, `schemasight.ollamaModel`).
+ * Supports chat (streaming), non-streaming generate (summarize, query rewrite, conversation summary), pull, tags, and context length.
  */
-export class OllamaService {
-  /** Base URL from VS Code config (schemasight.ollamaBaseUrl). */
+export class OllamaRepository {
   private get baseUrl(): string {
     return vscode.workspace.getConfiguration("schemasight").get("ollamaBaseUrl", DEFAULT_BASE_URL);
   }
 
-  /** Model name from VS Code config (schemasight.ollamaModel). */
   private get model(): string {
     return vscode.workspace.getConfiguration("schemasight").get("ollamaModel", DEFAULT_MODEL);
   }
 
   /**
-   * Returns the configured model name (for display and pull hint).
-   * @returns The current Ollama model name.
+   * Returns the configured model name (for display and context).
+   * @returns Current Ollama model name from settings.
    */
   getModelName(): string {
     return this.model;
   }
 
   /**
-   * Checks if Ollama is running and reachable (GET /api/tags).
-   * @returns True if the tags endpoint returns a valid response; false on network or parse error.
+   * Checks if Ollama is reachable (GET /api/tags).
+   * @returns True if tags endpoint returns valid response; false on network/parse error.
    */
   async isAvailable(): Promise<boolean> {
     try {
@@ -62,7 +58,7 @@ export class OllamaService {
 
   /**
    * Checks if the configured model is present in Ollama (already pulled).
-   * @returns True if the model appears in /api/tags; false otherwise.
+   * @returns True if the model appears in /api/tags.
    */
   async isModelPulled(): Promise<boolean> {
     try {
@@ -76,12 +72,35 @@ export class OllamaService {
   }
 
   /**
-   * Summarizes content for indexing (POST /api/generate, non-streaming).
-   * @param content Raw schema or procedure text to summarize.
-   * @returns A short summary (1–3 sentences); throws on API or invalid response.
+   * Pulls a model via POST /api/pull (non-streaming). Resolves when pull completes.
+   * @param modelName - Model name to pull (e.g. llama3.2:3b).
+   * @param signal - Optional AbortSignal to cancel the pull.
+   * @throws {Error} On non-OK response or network failure.
    */
-  async summarize(content: string): Promise<string> {
-    const raw = await this.generate(content, SUMMARIZE_SYSTEM);
+  async pullModel(modelName: string, signal?: AbortSignal): Promise<void> {
+    const url = `${this.baseUrl}/api/pull`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelName, stream: false }),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ollama pull failed (${res.status}): ${text || res.statusText}`);
+    }
+    await res.json();
+  }
+
+  /**
+   * Summarizes content for indexing (POST /api/generate with SUMMARIZE_SYSTEM).
+   * @param content - Raw schema or procedure text to summarize.
+   * @param signal - Optional AbortSignal (e.g. user cancelled re-index).
+   * @returns Short summary (1–3 sentences).
+   * @throws {Error} On API error or missing/invalid response.
+   */
+  async summarize(content: string, signal?: AbortSignal): Promise<string> {
+    const raw = await this.generate(content, SUMMARIZE_SYSTEM, signal);
     if (typeof raw !== "string") {
       throw new Error("Ollama response missing or invalid 'response' field");
     }
@@ -89,9 +108,10 @@ export class OllamaService {
   }
 
   /**
-   * Summarizes a conversation segment for context compression. Preserves entity names and references.
-   * @param prompt Formatted conversation (from PromptBuilder.buildConversationSummaryPrompt).
-   * @returns Summary string; throws on API or invalid response.
+   * Summarizes a conversation segment (CONVERSATION_SUMMARY_SYSTEM) for context compression.
+   * @param prompt - Formatted conversation (e.g. from PromptBuilder.buildConversationSummaryPrompt).
+   * @returns Summary string.
+   * @throws {Error} On API error or invalid response.
    */
   async summarizeConversation(prompt: string): Promise<string> {
     const raw = await this.generate(prompt, CONVERSATION_SUMMARY_SYSTEM);
@@ -102,9 +122,9 @@ export class OllamaService {
   }
 
   /**
-   * Rewrites a follow-up message into a standalone search query (prompt built from conversation + current message by PromptBuilder).
-   * @param prompt Full prompt for the rewriter (conversation + latest message).
-   * @returns Standalone search query string, or empty string if response is missing/invalid.
+   * Rewrites a follow-up message into a standalone search query (QUERY_REWRITE_SYSTEM).
+   * @param prompt - Full prompt (conversation + latest message).
+   * @returns Standalone search query or empty string if response missing/invalid.
    */
   async rewriteQueryForSearch(prompt: string): Promise<string> {
     const raw = await this.generate(prompt, QUERY_REWRITE_SYSTEM);
@@ -112,12 +132,12 @@ export class OllamaService {
   }
 
   /**
-   * Chat with history; streams tokens via onToken (POST /api/chat with stream: true).
-   * @param systemPrompt System prompt (e.g. RAG context).
-   * @param history Previous messages (role + content).
-   * @param userMessage Latest user message.
-   * @param onToken Callback invoked for each streamed token.
-   * @throws Error on non-OK response or missing response body.
+   * Chat with history; streams tokens via onToken (POST /api/chat, stream: true).
+   * @param systemPrompt - System prompt (e.g. RAG context).
+   * @param history - Previous messages (role + content).
+   * @param userMessage - Latest user message.
+   * @param onToken - Callback invoked for each streamed token.
+   * @throws {Error} On non-OK response or missing body.
    */
   async chat(
     systemPrompt: string,
@@ -130,6 +150,9 @@ export class OllamaService {
       ...history.map((m) => ({ role: m.role, content: m.content })),
       { role: "user", content: userMessage },
     ];
+    logger.info(
+      `[RAG] Ollama request: POST /api/chat, model=${this.model}, messages=${messages.length} (1 system + ${history.length} history + 1 user)`
+    );
 
     const url = `${this.baseUrl}/api/chat`;
     const res = await fetch(url, {
@@ -139,6 +162,7 @@ export class OllamaService {
         model: this.model,
         messages,
         stream: true,
+        think: false,
       }),
     });
     if (!res.ok) {
@@ -159,9 +183,9 @@ export class OllamaService {
   }
 
   /**
-   * Returns the model's context length (tokens) from Ollama POST /api/show.
+   * Returns the model's context length (tokens) from POST /api/show.
    * Parses `parameters` for "num_ctx N" or `model_info` for "*context_length".
-   * @returns Context length in tokens, or a safe default (8192) if unavailable.
+   * @returns Context length in tokens, or 8192 if unavailable.
    */
   async getContextLength(): Promise<number> {
     const DEFAULT_CTX = 8192;
@@ -200,9 +224,21 @@ export class OllamaService {
   }
 
   /**
-   * Fetches GET /api/tags (list of models). Shared by isAvailable and isModelPulled.
-   * @returns Parsed tags response; throws on network or non-OK response.
+   * Returns model names from GET /api/tags (for webview model selector).
+   * @returns List of model names; empty array on error.
    */
+  async getAvailableModels(): Promise<string[]> {
+    try {
+      const data = await this.getTags();
+      const models = data?.models ?? [];
+      return models
+        .map((m) => m.name)
+        .filter((n): n is string => typeof n === "string");
+    } catch {
+      return [];
+    }
+  }
+
   private async getTags(): Promise<OllamaTagsResponse> {
     const res = await fetch(`${this.baseUrl}/api/tags`, { method: "GET" });
     if (!res.ok) {
@@ -212,13 +248,11 @@ export class OllamaService {
     return (await res.json()) as OllamaTagsResponse;
   }
 
-  /**
-   * Non-streaming POST /api/generate. Used by summarize and rewriteQueryForSearch.
-   * @param prompt User prompt.
-   * @param system System prompt.
-   * @returns The response.response string, or undefined if missing.
-   */
-  private async generate(prompt: string, system: string): Promise<string | undefined> {
+  private async generate(
+    prompt: string,
+    system: string,
+    signal?: AbortSignal
+  ): Promise<string | undefined> {
     const url = `${this.baseUrl}/api/generate`;
     const res = await fetch(url, {
       method: "POST",
@@ -228,7 +262,9 @@ export class OllamaService {
         prompt,
         system,
         stream: false,
+        think: false,
       }),
+      signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -238,11 +274,6 @@ export class OllamaService {
     return data.response;
   }
 
-  /**
-   * Consumes the chat stream: reads chunks, splits by newline, parses JSON lines and invokes onToken for message.content.
-   * @param reader Response body reader.
-   * @param onToken Callback for each token (message.content from each JSON line).
-   */
   private async streamChatResponse(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     onToken: StreamCallback
@@ -266,7 +297,7 @@ export class OllamaService {
             onToken(content);
           }
         } catch {
-          // ignore malformed JSON lines (e.g. keep_alive pings)
+          // ignore malformed JSON lines
         }
       }
     }
