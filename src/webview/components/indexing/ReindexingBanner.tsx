@@ -1,7 +1,8 @@
 import React from "react";
 import { Loader2 } from "lucide-react";
-import type { CrawlProgress } from "../../shared/types";
-import { formatCrawlPhase } from "../utils/formatCrawlPhase";
+import type { CrawlProgress } from "../../../shared/types";
+import { formatCrawlPhase } from "../../utils/formatCrawlPhase";
+import { getProgressPercent } from "../../utils/getProgressPercent";
 
 /** Props for the re-indexing banner. */
 interface ReindexingBannerProps {
@@ -9,12 +10,6 @@ interface ReindexingBannerProps {
   progress: CrawlProgress;
   /** Optional cancel handler; when provided, a Cancel button is shown. */
   onCancel?: () => void;
-}
-
-/** Returns 0–100 percent from progress (0 if total is 0). */
-function getProgressPercent(progress: CrawlProgress): number {
-  if (progress.total <= 0) return 0;
-  return Math.round((progress.current / progress.total) * 100);
 }
 
 /**

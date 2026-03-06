@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect } from "react";
-import { X, Loader2 } from "lucide-react";
+import React from "react";
+import { X } from "lucide-react";
 import { ConnectionForm } from "./ConnectionForm";
-import { DbConnectionConfig } from "../../shared/types";
-import type { AddConnectionResult } from "../hooks/useConnections";
+import { DbConnectionConfig } from "../../../shared/types";
+import type { AddConnectionResult } from "../../hooks/useConnections";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 
 /** Props for the add-connection modal. */
 interface AddConnectionModalProps {
@@ -29,21 +30,7 @@ export function AddConnectionModal({
   addConnectionPending = false,
   addConnectionResult = null,
 }: AddConnectionModalProps) {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [isOpen, onClose]);
-
-  const handleAdd = useCallback(
-    (config: DbConnectionConfig & { password: string }) => {
-      onAdd(config);
-    },
-    [onAdd]
-  );
+  useEscapeKey(onClose, isOpen);
 
   if (!isOpen) return null;
 
@@ -81,7 +68,7 @@ export function AddConnectionModal({
               {addConnectionResult.error ?? "Connection failed"}
             </div>
           )}
-          <ConnectionForm onAdd={handleAdd} addConnectionPending={addConnectionPending} />
+          <ConnectionForm onAdd={onAdd} addConnectionPending={addConnectionPending} />
         </div>
       </div>
     </div>

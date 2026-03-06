@@ -2,24 +2,27 @@ import * as vscode from "vscode";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { ConnectionManager } from "../db/ConnectionManager";
-import { SchemaService } from "../db/SchemaService";
-import { OllamaService } from "../llm/OllamaService";
-import { PromptBuilder } from "../llm/PromptBuilder";
-import { EmbeddingService } from "../embeddings/EmbeddingService";
-import { VectorStoreManager } from "../vectorstore/VectorStoreManager";
-import { Indexer } from "../vectorstore/Indexer";
+import type { ConnectionRepository } from "../repositories/ConnectionRepository";
+import type { SchemaRepository } from "../repositories/SchemaRepository";
+import type { ChunkRepository } from "../repositories/ChunkRepository";
+import type { OllamaRepository } from "../repositories/OllamaRepository";
+import type { PromptBuilder } from "../llm/PromptBuilder";
+import type { RagPipelineService } from "../services/rag/RagPipelineService";
+import type { Indexer } from "../services/indexing/Indexer";
 import { MessageRouter } from "./MessageRouter";
 import { WebviewToExtensionMessage } from "../shared/types";
 
-/** Injected services used by MessageRouter to handle webview messages. */
+/**
+ * Injected services used by MessageRouter to handle webview messages.
+ * All repositories and services are created in extension.ts and passed here.
+ */
 interface Services {
-  connectionManager: ConnectionManager;
-  schemaService: SchemaService;
-  ollamaService: OllamaService;
+  connectionRepository: ConnectionRepository;
+  schemaRepository: SchemaRepository;
+  chunkRepository: ChunkRepository;
+  ollamaRepository: OllamaRepository;
   promptBuilder: PromptBuilder;
-  embeddingService: EmbeddingService;
-  vectorStoreManager: VectorStoreManager;
+  ragPipelineService: RagPipelineService;
   indexer: Indexer;
 }
 

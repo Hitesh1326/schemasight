@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import { Plus, MoreVertical } from "lucide-react";
-import { DbConnectionConfig, CrawlProgress } from "../../shared/types";
+import { DbConnectionConfig, CrawlProgress } from "../../../shared/types";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 /** Props for the connections sidebar (list, selection, crawl state, and actions). */
 interface SidebarProps {
@@ -12,13 +13,14 @@ interface SidebarProps {
   onAddConnection: () => void;
   onTest: (id: string) => void;
   onCrawl: (id: string) => void;
+  onReindexRequest: (id: string) => void;
   onRemove: (id: string) => void;
   onIndexInfo?: (connectionId: string) => void;
 }
 
 /**
  * Connections sidebar: list of connections with avatar, active state, and per-item ⋮ menu
- * (Test, Re-index/Crawl schema, Index info, Remove). Add connection next to header. Click-outside closes menu.
+ * (Test, Crawl schema / Change model, Index info, Remove). Add connection next to header. Click-outside closes menu.
  */
 export function Sidebar({
   connections,
@@ -29,22 +31,14 @@ export function Sidebar({
   onAddConnection,
   onTest,
   onCrawl,
+  onReindexRequest,
   onRemove,
   onIndexInfo,
 }: SidebarProps) {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!menuOpenId) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpenId(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuOpenId]);
+  useClickOutside(menuRef, () => setMenuOpenId(null), menuOpenId !== null);
 
   return (
     <aside className="w-[220px] flex flex-col border-r border-vscode-panel-border bg-vscode-sideBar-background overflow-hidden shrink-0">
@@ -61,6 +55,7 @@ export function Sidebar({
         onCloseMenu={() => setMenuOpenId(null)}
         onTest={onTest}
         onCrawl={onCrawl}
+        onReindexRequest={onReindexRequest}
         onRemove={onRemove}
         onIndexInfo={onIndexInfo}
       />
@@ -105,6 +100,7 @@ function ConnectionList({
   onCloseMenu,
   onTest,
   onCrawl,
+  onReindexRequest,
   onRemove,
   onIndexInfo,
 }: {
@@ -119,6 +115,7 @@ function ConnectionList({
   onCloseMenu: () => void;
   onTest: (id: string) => void;
   onCrawl: (id: string) => void;
+  onReindexRequest: (id: string) => void;
   onRemove: (id: string) => void;
   onIndexInfo?: (id: string) => void;
 }) {
@@ -136,9 +133,9 @@ function ConnectionList({
           crawlProgress={crawlProgress}
           onSelect={() => onSelectConnection(conn.id)}
           onToggleMenu={() => onToggleMenu(conn.id)}
-          onCloseMenu={onCloseMenu}
           onTest={() => { onTest(conn.id); onCloseMenu(); }}
           onCrawl={() => { onSelectConnection(conn.id); onCrawl(conn.id); onCloseMenu(); }}
+          onReindexRequest={() => { onSelectConnection(conn.id); onReindexRequest(conn.id); onCloseMenu(); }}
           onRemove={() => { onRemove(conn.id); onCloseMenu(); }}
           onIndexInfo={onIndexInfo ? () => { onIndexInfo(conn.id); onCloseMenu(); } : undefined}
         />
@@ -163,9 +160,9 @@ function ConnectionRow({
   crawlProgress,
   onSelect,
   onToggleMenu,
-  onCloseMenu: _onCloseMenu,
   onTest,
   onCrawl,
+  onReindexRequest,
   onRemove,
   onIndexInfo,
 }: {
@@ -178,9 +175,9 @@ function ConnectionRow({
   crawlProgress: CrawlProgress | null;
   onSelect: () => void;
   onToggleMenu: () => void;
-  onCloseMenu: () => void;
   onTest: () => void;
   onCrawl: () => void;
+  onReindexRequest: () => void;
   onRemove: () => void;
   onIndexInfo?: () => void;
 }) {
@@ -219,7 +216,7 @@ function ConnectionRow({
               isIndexed={isIndexed}
               crawlProgress={crawlProgress}
               onTest={onTest}
-              onCrawl={onCrawl}
+              onCrawl={isIndexed ? onReindexRequest : onCrawl}
               onRemove={onRemove}
               onIndexInfo={onIndexInfo}
             />
@@ -230,7 +227,7 @@ function ConnectionRow({
   );
 }
 
-/** Dropdown menu for a connection row: Test, Crawl/Re-index, Index info (if indexed), Remove. */
+/** Dropdown menu for a connection row: Test, Crawl schema / Change model, Index info (if indexed), Remove. */
 function ConnectionMenu({
   isIndexed,
   crawlProgress,
@@ -261,7 +258,7 @@ function ConnectionMenu({
         disabled={!!crawlProgress}
         onClick={() => { if (!crawlProgress) onCrawl(); }}
       >
-        {isIndexed ? "Re-index" : "Crawl schema"}
+        {isIndexed ? "Change model" : "Crawl schema"}
       </button>
       {isIndexed && onIndexInfo && (
         <button

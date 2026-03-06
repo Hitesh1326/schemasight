@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { DbConnectionConfig, CrawlProgress, IndexStats } from "../../shared/types";
+import { useState, useEffect, useCallback } from "react";
+import { DbConnectionConfig, CrawlProgress } from "../../shared/types";
 import { postMessage, onMessage } from "../vscodeApi";
 
 /** Result of an add-connection attempt (test then add). */
 export type AddConnectionResult = { success: boolean; error?: string } | null;
 
-/** Return type of useConnections: connection list, crawl state, index stats, and actions. */
+/** Return type of useConnections: connection list, crawl state, and actions. */
 interface UseConnectionsReturn {
   connections: DbConnectionConfig[];
   crawledConnectionIds: string[];
@@ -18,20 +18,12 @@ interface UseConnectionsReturn {
   testConnection: (id: string) => void;
   crawlSchema: (id: string) => void;
   cancelCrawl: (connectionId: string) => void;
-  requestIndexStats: (connectionId: string) => void;
-  indexStats: IndexStats | null;
-  indexStatsLoading: boolean;
-  clearIndexInfo: () => void;
 }
 
 /**
- * Connection list and crawl/index state driven by extension messages. On mount, requests
- * GET_CONNECTIONS and subscribes to CONNECTIONS_LIST, CONNECTION_ADDED, CONNECTION_REMOVED,
- * CRAWLED_CONNECTION_IDS, CRAWL_PROGRESS, CRAWL_COMPLETE/CANCELLED/ERROR, and INDEX_STATS.
- * requestIndexStats(connectionId) triggers GET_INDEX_STATS; INDEX_STATS is applied only when
- * it matches the last requested id (ref so the effect closure stays correct).
- *
- * @returns Connections, crawled ids, crawl progress, action callbacks, index stats, and clearIndexInfo.
+ * Connection list and crawl state driven by extension messages. On mount, requests
+ * GET_CONNECTIONS and subscribes to connection/crawl messages.
+ * Index stats are managed separately by useIndexStats.
  */
 export function useConnections(): UseConnectionsReturn {
   const [connections, setConnections] = useState<DbConnectionConfig[]>([]);
@@ -39,9 +31,6 @@ export function useConnections(): UseConnectionsReturn {
   const [crawlProgress, setCrawlProgress] = useState<CrawlProgress | null>(null);
   const [addConnectionPending, setAddConnectionPending] = useState(false);
   const [addConnectionResult, setAddConnectionResult] = useState<AddConnectionResult>(null);
-  const [indexStats, setIndexStats] = useState<IndexStats | null>(null);
-  const [indexStatsRequestedId, setIndexStatsRequestedId] = useState<string | null>(null);
-  const indexStatsRequestedIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     postMessage({ type: "GET_CONNECTIONS" });
@@ -72,13 +61,6 @@ export function useConnections(): UseConnectionsReturn {
         case "CRAWL_CANCELLED":
         case "CRAWL_ERROR":
           setCrawlProgress(null);
-          break;
-        case "INDEX_STATS":
-          if (message.payload.connectionId === indexStatsRequestedIdRef.current) {
-            setIndexStats(message.payload.stats);
-            indexStatsRequestedIdRef.current = null;
-            setIndexStatsRequestedId(null);
-          }
           break;
       }
     });
@@ -112,21 +94,6 @@ export function useConnections(): UseConnectionsReturn {
     postMessage({ type: "CRAWL_CANCEL", payload: { connectionId } });
   }, []);
 
-  const requestIndexStats = useCallback((connectionId: string) => {
-    indexStatsRequestedIdRef.current = connectionId;
-    setIndexStatsRequestedId(connectionId);
-    setIndexStats(null);
-    postMessage({ type: "GET_INDEX_STATS", payload: { connectionId } });
-  }, []);
-
-  const clearIndexInfo = useCallback(() => {
-    indexStatsRequestedIdRef.current = null;
-    setIndexStatsRequestedId(null);
-    setIndexStats(null);
-  }, []);
-
-  const indexStatsLoading = indexStatsRequestedId !== null;
-
   return {
     connections,
     crawledConnectionIds,
@@ -139,9 +106,5 @@ export function useConnections(): UseConnectionsReturn {
     testConnection,
     crawlSchema,
     cancelCrawl,
-    requestIndexStats,
-    indexStats,
-    indexStatsLoading,
-    clearIndexInfo,
   };
 }

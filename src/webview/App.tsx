@@ -1,36 +1,51 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Sidebar } from "./components/Sidebar";
-import { ChatPanel } from "./components/ChatPanel";
-import { AddConnectionModal } from "./components/AddConnectionModal";
-import { IndexInfoModal } from "./components/IndexInfoModal";
+import React, { useState, useEffect, useCallback } from "react";
+import { Sidebar } from "./components/connections/Sidebar";
+import { ChatPanel } from "./components/chat/ChatPanel";
+import { AddConnectionModal } from "./components/connections/AddConnectionModal";
+import { IndexInfoModal } from "./components/indexing/IndexInfoModal";
 import { useConnections } from "./hooks/useConnections";
 import { useChat } from "./hooks/useChat";
 import { useOllamaStatus } from "./hooks/useOllamaStatus";
+import { useIndexStats } from "./hooks/useIndexStats";
+import { useActiveConnection } from "./hooks/useActiveConnection";
+import { onMessage } from "./vscodeApi";
 
 /**
  * Root webview UI: sidebar (connections, crawl, index info), main chat area, and modals for
- * adding a connection and viewing index stats. Clears active connection when it is removed
- * from the list.
+ * adding a connection and viewing index stats.
  */
 export function App() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(null);
   const [addConnectionModalOpen, setAddConnectionModalOpen] = useState(false);
   const [indexInfoConnectionId, setIndexInfoConnectionId] = useState<string | null>(null);
+  const [reindexConnectionId, setReindexConnectionId] = useState<string | null>(null);
 
   const {
     connections,
     crawledConnectionIds,
     crawlProgress,
     addConnection,
+    addConnectionPending,
+    addConnectionResult,
+    clearAddConnectionResult,
     removeConnection,
     testConnection,
     crawlSchema,
     cancelCrawl,
-    requestIndexStats,
+  } = useConnections();
+
+  const {
     indexStats,
     indexStatsLoading,
+    requestIndexStats,
     clearIndexInfo,
-  } = useConnections();
+    handleMessage: handleIndexStatsMessage,
+  } = useIndexStats();
+
+  useEffect(() => {
+    return onMessage(handleIndexStatsMessage);
+  }, [handleIndexStatsMessage]);
+
   const {
     messages,
     sendMessage,
@@ -42,30 +57,47 @@ export function App() {
     isSummarized,
     clearHistory,
   } = useChat(activeConnectionId);
-  const { available: ollamaAvailable, model: ollamaModel, modelPulled: ollamaModelPulled, check: checkOllama } =
-    useOllamaStatus();
 
-  const isActiveCrawled = activeConnectionId !== null && crawledConnectionIds.includes(activeConnectionId);
-  const isActiveCrawling = crawlProgress !== null && crawlProgress.connectionId === activeConnectionId;
-  const cancelActiveCrawl = () => activeConnectionId && cancelCrawl(activeConnectionId);
+  const {
+    available: ollamaAvailable,
+    model: ollamaModel,
+    modelPulled: ollamaModelPulled,
+    models: ollamaModels,
+    setModel: setOllamaModel,
+    check: checkOllama,
+    pullModel: onPullModel,
+    pullingModel,
+  } = useOllamaStatus();
 
-  const activeConnection = useMemo(
-    () => (activeConnectionId ? connections.find((c) => c.id === activeConnectionId) : null),
-    [activeConnectionId, connections]
+  const { activeConnectionName, isActiveCrawled, isActiveCrawling } = useActiveConnection(
+    activeConnectionId,
+    connections,
+    crawledConnectionIds,
+    crawlProgress
   );
-  const activeConnectionName = useMemo(() => {
-    if (!activeConnection) return "this database";
-    const label = activeConnection.label?.trim() || "";
-    const technical = `${activeConnection.driver}@${activeConnection.host}/${activeConnection.database}`;
-    const full = label || technical;
-    return full === technical ? activeConnection.database : full || "this database";
-  }, [activeConnection]);
+
+  const cancelActiveCrawl = useCallback(() => {
+    if (activeConnectionId) cancelCrawl(activeConnectionId);
+  }, [activeConnectionId, cancelCrawl]);
 
   useEffect(() => {
     if (activeConnectionId && !connections.some((c) => c.id === activeConnectionId)) {
       setActiveConnectionId(null);
     }
   }, [activeConnectionId, connections]);
+
+  useEffect(() => {
+    if (reindexConnectionId != null && activeConnectionId !== reindexConnectionId) {
+      setReindexConnectionId(null);
+    }
+  }, [activeConnectionId, reindexConnectionId]);
+
+  useEffect(() => {
+    if (addConnectionResult?.success === true) {
+      setAddConnectionModalOpen(false);
+      clearAddConnectionResult();
+    }
+  }, [addConnectionResult, clearAddConnectionResult]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -75,9 +107,16 @@ export function App() {
         activeConnectionId={activeConnectionId}
         crawlProgress={crawlProgress}
         onSelectConnection={setActiveConnectionId}
-        onAddConnection={() => setAddConnectionModalOpen(true)}
+        onAddConnection={() => {
+          clearAddConnectionResult();
+          setAddConnectionModalOpen(true);
+        }}
         onTest={testConnection}
         onCrawl={crawlSchema}
+        onReindexRequest={(id) => {
+          setReindexConnectionId(id);
+          setActiveConnectionId(id);
+        }}
         onRemove={removeConnection}
         onIndexInfo={(id) => {
           setIndexInfoConnectionId(id);
@@ -114,10 +153,16 @@ export function App() {
               onCancelCrawl={cancelActiveCrawl}
               isCrawling={isActiveCrawling}
               crawlProgress={crawlProgress}
+              reindexConnectionId={reindexConnectionId}
+              onClearReindexRequest={() => setReindexConnectionId(null)}
               ollamaAvailable={ollamaAvailable}
               ollamaModel={ollamaModel}
               ollamaModelPulled={ollamaModelPulled}
+              ollamaModels={ollamaModels}
+              onModelChange={setOllamaModel}
               onCheckOllama={checkOllama}
+              onPullModel={onPullModel}
+              pullingModel={pullingModel}
             />
           </div>
         )}
@@ -125,15 +170,22 @@ export function App() {
 
       <AddConnectionModal
         isOpen={addConnectionModalOpen}
-        onClose={() => setAddConnectionModalOpen(false)}
+        onClose={() => {
+          setAddConnectionModalOpen(false);
+          clearAddConnectionResult();
+        }}
         onAdd={addConnection}
+        addConnectionPending={addConnectionPending}
+        addConnectionResult={addConnectionResult}
       />
 
       <IndexInfoModal
         isOpen={indexInfoConnectionId !== null}
         connectionId={indexInfoConnectionId ?? ""}
         connectionName={
-          connections.find((c) => c.id === indexInfoConnectionId)?.database ?? indexInfoConnectionId ?? ""
+          connections.find((c) => c.id === indexInfoConnectionId)?.database ??
+          indexInfoConnectionId ??
+          ""
         }
         stats={indexStats}
         loading={indexStatsLoading}
@@ -144,7 +196,8 @@ export function App() {
         onReindex={(id) => {
           setIndexInfoConnectionId(null);
           clearIndexInfo();
-          crawlSchema(id);
+          setReindexConnectionId(id);
+          setActiveConnectionId(id);
         }}
       />
     </div>

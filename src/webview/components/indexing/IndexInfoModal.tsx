@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { X, Info } from "lucide-react";
-import { IndexStats } from "../../shared/types";
+import { IndexStats } from "../../../shared/types";
 
 /** Props for the index info modal (connection, stats, loading, close/reindex actions). */
 interface IndexInfoModalProps {

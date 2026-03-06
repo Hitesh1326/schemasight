@@ -1,8 +1,8 @@
 import React, { useCallback, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { DbDriver } from "../../shared/types";
-import type { DbConnectionConfig } from "../../shared/types";
-import { randomId } from "../utils/randomId";
+import { DbDriver } from "../../../shared/types";
+import type { DbConnectionConfig } from "../../../shared/types";
+import { randomId } from "../../utils/randomId";
 
 /** Props for the connection form (single callback on successful submit). */
 interface ConnectionFormProps {
