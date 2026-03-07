@@ -149,7 +149,9 @@ export function App() {
               connectionId={activeConnectionId}
               connectionName={activeConnectionName}
               isCrawled={isActiveCrawled}
-              onCrawl={() => activeConnectionId && crawlSchema(activeConnectionId)}
+              onCrawl={(model) =>
+                activeConnectionId && crawlSchema(activeConnectionId, model)
+              }
               onCancelCrawl={cancelActiveCrawl}
               isCrawling={isActiveCrawling}
               crawlProgress={crawlProgress}

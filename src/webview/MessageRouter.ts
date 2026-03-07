@@ -87,9 +87,14 @@ export class MessageRouter {
         case "PULL_MODEL":
           await this.ollamaHandler.handlePullModel(message.payload.model, post);
           break;
-        case "CRAWL_SCHEMA":
-          await this.crawlHandler.handleCrawlSchema(message.payload.id, post);
+        case "CRAWL_SCHEMA": {
+          const { id, model } = message.payload;
+          if (model?.trim()) {
+            await this.ollamaHandler.handleSetOllamaModel(model.trim(), post);
+          }
+          await this.crawlHandler.handleCrawlSchema(id, post);
           break;
+        }
         case "CRAWL_CANCEL":
           this.crawlHandler.handleCrawlCancel(message.payload.connectionId);
           break;

@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Database, AlertTriangle, Check, Lock, Loader2 } from "lucide-react";
 import type { CrawlProgress } from "../../../shared/types";
 import { useCopyFeedback } from "../../hooks/useCopyFeedback";
@@ -33,7 +33,7 @@ const STEPPER_STEP_CLASS: Record<StepperState, string> = {
 /** Props for the index-first onboarding card (connection, crawl/Ollama state, and callbacks). */
 interface IndexFirstCardProps {
   connectionName: string;
-  onCrawl: () => void;
+  onCrawl: (model?: string) => void;
   onCancelCrawl?: () => void;
   isCrawling: boolean;
   crawlProgress: CrawlProgress | null;
@@ -91,7 +91,7 @@ function CrawlActionBlock({
   isCrawling: boolean;
   crawlProgress: CrawlProgress | null;
   canCrawl: boolean;
-  onCrawl: () => void;
+  onCrawl: (model?: string) => void;
   onCancelCrawl?: () => void;
 }) {
   if (isCrawling) {
@@ -173,13 +173,25 @@ export function IndexFirstCard({
   pullingModel,
 }: IndexFirstCardProps) {
   const { copiedWhich, copyWithFeedback } = useCopyFeedback();
+  const [pendingModel, setPendingModel] = useState<string | null>(ollamaModel ?? null);
 
   useEffect(() => {
     onCheckOllama?.();
   }, [onCheckOllama]);
 
-  const derived = getOllamaDerivedState({ ollamaAvailable, ollamaModel, ollamaModelPulled });
-  const { isCheckingOllama, modelChosen, isOllamaReady, needsPull, ollamaUnavailable, canCrawl } = derived;
+  useEffect(() => {
+    setPendingModel(ollamaModel ?? null);
+  }, [ollamaModel]);
+
+  const pendingModelPulled =
+    pendingModel != null ? ollamaModels.includes(pendingModel) : null;
+  const derived = getOllamaDerivedState({
+    ollamaAvailable,
+    ollamaModel: pendingModel,
+    ollamaModelPulled: pendingModelPulled,
+  });
+  const { isCheckingOllama, modelChosen, isOllamaReady, needsPull, ollamaUnavailable, canCrawl } =
+    derived;
 
   const {
     showOtherModel,
@@ -190,7 +202,12 @@ export function IndexFirstCard({
     pullCommand,
     isPulling,
     selectOptions,
-  } = useOllamaModelForm({ ollamaModel, ollamaModels, pullingModel, onModelChange });
+  } = useOllamaModelForm({
+    ollamaModel: pendingModel,
+    ollamaModels,
+    pullingModel,
+    onModelChange: setPendingModel,
+  });
 
   const showCheckAgain = (needsPull || ollamaUnavailable) && !!onCheckOllama;
 
@@ -228,30 +245,30 @@ export function IndexFirstCard({
             <>
               <ModelsSetupExplanation />
               <ModelSelector
-                ollamaModel={ollamaModel}
+                ollamaModel={pendingModel}
                 selectOptions={selectOptions}
                 customModelValue={CUSTOM_MODEL_VALUE}
                 showOtherModel={showOtherModel}
                 otherModelName={otherModelName}
                 isCrawling={isCrawling}
-                onModelChange={onModelChange}
+                onModelChange={setPendingModel}
                 setShowOtherModel={setShowOtherModel}
                 setOtherModelName={setOtherModelName}
                 onOtherSubmit={handleOtherSubmit}
               />
               {modelChosen && isOllamaReady && (
-                <ModelReadyBadge label="Ready" model={ollamaModel!} />
+                <ModelReadyBadge label="Ready" model={pendingModel!} />
               )}
               {needsPull && (
                 <ModelsToPullSection
                   items={[
                     {
-                      label: ollamaModel ?? DEFAULT_PULL_MODEL,
+                      label: pendingModel ?? DEFAULT_PULL_MODEL,
                       command: pullCommand,
                       copyLabel: "chat" as const,
-                      onPull: () => ollamaModel && onPullModel(ollamaModel),
+                      onPull: () => pendingModel && onPullModel(pendingModel),
                       isPulling,
-                      showRecommendedBadge: ollamaModel === RECOMMENDED_MODEL,
+                      showRecommendedBadge: pendingModel === RECOMMENDED_MODEL,
                     },
                   ]}
                   copied={copiedWhich}
@@ -267,7 +284,7 @@ export function IndexFirstCard({
           isCrawling={isCrawling}
           crawlProgress={crawlProgress}
           canCrawl={canCrawl}
-          onCrawl={onCrawl}
+          onCrawl={() => onCrawl(pendingModel ?? undefined)}
           onCancelCrawl={onCancelCrawl}
         />
 

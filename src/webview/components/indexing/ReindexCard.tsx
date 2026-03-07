@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Database, Loader2 } from "lucide-react";
 import type { CrawlProgress } from "../../../shared/types";
 import {
@@ -18,7 +18,7 @@ import { useOllamaModelForm } from "../../hooks/useOllamaModelForm";
 
 export interface ReindexCardProps {
   connectionName: string;
-  onReindex: () => void;
+  onReindex: (model: string) => void;
   onCancel: () => void;
   isCrawling: boolean;
   crawlProgress: CrawlProgress | null;
@@ -53,9 +53,21 @@ export function ReindexCard({
   pullingModel,
 }: ReindexCardProps) {
   const { copiedWhich, copyWithFeedback } = useCopyFeedback();
+  const [pendingModel, setPendingModel] = useState<string | null>(ollamaModel ?? null);
 
-  const derived = getOllamaDerivedState({ ollamaAvailable, ollamaModel, ollamaModelPulled });
-  const { isCheckingOllama, modelChosen, isOllamaReady, needsPull, ollamaUnavailable, canCrawl } = derived;
+  useEffect(() => {
+    setPendingModel(ollamaModel ?? null);
+  }, [ollamaModel]);
+
+  const pendingModelPulled =
+    pendingModel != null ? ollamaModels.includes(pendingModel) : null;
+  const derived = getOllamaDerivedState({
+    ollamaAvailable,
+    ollamaModel: pendingModel,
+    ollamaModelPulled: pendingModelPulled,
+  });
+  const { isCheckingOllama, modelChosen, isOllamaReady, needsPull, ollamaUnavailable, canCrawl } =
+    derived;
 
   const {
     showOtherModel,
@@ -66,7 +78,12 @@ export function ReindexCard({
     pullCommand,
     isPulling,
     selectOptions,
-  } = useOllamaModelForm({ ollamaModel, ollamaModels, pullingModel, onModelChange });
+  } = useOllamaModelForm({
+    ollamaModel: pendingModel,
+    ollamaModels,
+    pullingModel,
+    onModelChange: setPendingModel,
+  });
 
   const showCheckAgain = (needsPull || ollamaUnavailable) && !!onCheckOllama;
 
@@ -92,30 +109,30 @@ export function ReindexCard({
             <>
               <ModelsSetupExplanation />
               <ModelSelector
-                ollamaModel={ollamaModel}
+                ollamaModel={pendingModel}
                 selectOptions={selectOptions}
                 customModelValue={CUSTOM_MODEL_VALUE}
                 showOtherModel={showOtherModel}
                 otherModelName={otherModelName}
                 isCrawling={isCrawling}
-                onModelChange={onModelChange}
+                onModelChange={setPendingModel}
                 setShowOtherModel={setShowOtherModel}
                 setOtherModelName={setOtherModelName}
                 onOtherSubmit={handleOtherSubmit}
               />
               {modelChosen && isOllamaReady && (
-                <ModelReadyBadge label="Ready" model={ollamaModel!} />
+                <ModelReadyBadge label="Ready" model={pendingModel!} />
               )}
               {needsPull && (
                 <ModelsToPullSection
                   items={[
                     {
-                      label: ollamaModel ?? DEFAULT_PULL_MODEL,
+                      label: pendingModel ?? DEFAULT_PULL_MODEL,
                       command: pullCommand,
                       copyLabel: "chat" as const,
-                      onPull: () => ollamaModel && onPullModel(ollamaModel),
+                      onPull: () => pendingModel && onPullModel(pendingModel),
                       isPulling,
-                      showRecommendedBadge: ollamaModel === RECOMMENDED_MODEL,
+                      showRecommendedBadge: pendingModel === RECOMMENDED_MODEL,
                     },
                   ]}
                   copied={copiedWhich}
@@ -148,7 +165,7 @@ export function ReindexCard({
           <div className="w-full flex flex-col items-center gap-3 mb-2">
             <button
               type="button"
-              onClick={onReindex}
+              onClick={() => pendingModel && onReindex(pendingModel)}
               disabled={!canCrawl}
               title={!canCrawl ? "Choose and pull a model first" : undefined}
               className="w-full max-w-sm px-5 py-2.5 rounded-md text-sm font-medium bg-vscode-button-background text-vscode-button-foreground hover:bg-vscode-button-hoverBackground disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-vscode-button-background border border-transparent"

@@ -21,7 +21,7 @@ interface ChatPanelProps {
   connectionId: string | null;
   connectionName: string;
   isCrawled: boolean;
-  onCrawl: () => void;
+  onCrawl: (model?: string) => void;
   onCancelCrawl?: () => void;
   isCrawling: boolean;
   crawlProgress: CrawlProgress | null;
@@ -117,7 +117,7 @@ export function ChatPanel({
       <div className="flex flex-col flex-1 min-h-0">
         <IndexFirstCard
           connectionName={connectionName}
-          onCrawl={onCrawl}
+          onCrawl={(model) => onCrawl(model)}
           onCancelCrawl={onCancelCrawl}
           isCrawling={isCrawling}
           crawlProgress={crawlProgress}
@@ -139,9 +139,9 @@ export function ChatPanel({
       <div className="flex flex-col flex-1 min-h-0">
         <ReindexCard
           connectionName={connectionName}
-          onReindex={() => {
+          onReindex={(model) => {
             onClearReindexRequest();
-            onCrawl();
+            onCrawl(model);
           }}
           onCancel={onClearReindexRequest}
           isCrawling={isCrawling}

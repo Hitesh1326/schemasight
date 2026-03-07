@@ -109,7 +109,7 @@ export type WebviewToExtensionMessage =
   | { type: "ADD_CONNECTION"; payload: DbConnectionConfig & { password: string } }
   | { type: "REMOVE_CONNECTION"; payload: { id: string } }
   | { type: "TEST_CONNECTION"; payload: { id: string } }
-  | { type: "CRAWL_SCHEMA"; payload: { id: string } }
+  | { type: "CRAWL_SCHEMA"; payload: { id: string; model?: string } }
   | { type: "CRAWL_CANCEL"; payload: { connectionId: string } }
   | { type: "GET_OLLAMA_STATUS" }
   | { type: "GET_OLLAMA_MODELS" }

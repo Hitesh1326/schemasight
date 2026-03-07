@@ -86,8 +86,8 @@ export function useConnections(): UseConnectionsReturn {
     postMessage({ type: "TEST_CONNECTION", payload: { id } });
   }, []);
 
-  const crawlSchema = useCallback((id: string) => {
-    postMessage({ type: "CRAWL_SCHEMA", payload: { id } });
+  const crawlSchema = useCallback((id: string, model?: string) => {
+    postMessage({ type: "CRAWL_SCHEMA", payload: { id, model } });
   }, []);
 
   const cancelCrawl = useCallback((connectionId: string) => {
