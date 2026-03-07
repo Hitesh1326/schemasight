@@ -16,10 +16,10 @@ Install the Mermaid CLI (if needed):
 npm install -g @mermaid-js/mermaid-cli
 ```
 
-From the repo root, run the following to update the diagrams (use `-b transparent` for a transparent background):
+From the repo root, run the following to update the diagrams (`-b transparent` for transparent background, `--scale 4` for higher resolution):
 
 ```bash
-mmdc -i docs/diagrams/system-architecture.mmd -o assets/system-architecture.png -b transparent
-mmdc -i docs/diagrams/crawl-index-flow.mmd -o assets/crawl-index-flow.png -b transparent
-mmdc -i docs/diagrams/chat-rag-flow.mmd -o assets/chat-rag-flow.png -b transparent
+mmdc -i docs/diagrams/system-architecture.mmd -o assets/system-architecture.png -b transparent --scale 4
+mmdc -i docs/diagrams/crawl-index-flow.mmd -o assets/crawl-index-flow.png -b transparent --scale 4
+mmdc -i docs/diagrams/chat-rag-flow.mmd -o assets/chat-rag-flow.png -b transparent --scale 4
 ```
