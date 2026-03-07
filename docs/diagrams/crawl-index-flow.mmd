@@ -1,0 +1,35 @@
+sequenceDiagram
+  participant User
+  participant Webview
+  participant MessageRouter
+  participant CrawlHandler
+  participant ConnectionRepo
+  participant SchemaRepo
+  participant Indexer
+  participant ChunkRepo
+  participant DB as DB Driver
+  participant Ollama
+  participant Embeddings as Transformers.js (EmbeddingRepo)
+
+  User->>Webview: Click Crawl
+  Webview->>MessageRouter: CRAWL_SCHEMA payload.id
+  MessageRouter->>CrawlHandler: handleCrawlSchema(connectionId)
+  CrawlHandler->>ConnectionRepo: getById, getPassword
+  ConnectionRepo-->>CrawlHandler: config, password
+  CrawlHandler->>SchemaRepo: crawl(config, password, onProgress, signal)
+  SchemaRepo->>DB: crawlSchema
+  DB-->>SchemaRepo: DatabaseSchema
+  SchemaRepo-->>CrawlHandler: DatabaseSchema
+  CrawlHandler->>Indexer: index(schema, onProgress, signal)
+  Indexer->>Indexer: buildChunksFromSchema
+  Indexer->>Ollama: summarize per chunk
+  Ollama-->>Indexer: summaries
+  Indexer->>Embeddings: embedBatch(summaries)
+  Embeddings-->>Indexer: vectors
+  Indexer->>ChunkRepo: upsertChunks(connectionId, chunks)
+  ChunkRepo->>ChunkRepo: create table, vector + FTS index
+  ChunkRepo-->>Indexer: done
+  Indexer-->>CrawlHandler: done
+  CrawlHandler->>ConnectionRepo: addCrawledConnectionId
+  CrawlHandler->>Webview: CRAWL_COMPLETE, CRAWLED_CONNECTION_IDS
+  Webview->>User: Index ready

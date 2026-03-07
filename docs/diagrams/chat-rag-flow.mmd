@@ -1,0 +1,46 @@
+sequenceDiagram
+  participant User
+  participant Webview
+  participant MessageRouter
+  participant ChatHandler
+  participant RagPipeline
+  participant QueryClassifier
+  participant ConnectionRepo
+  participant OllamaRepo
+  participant ChunkRepo
+  participant EmbeddingRepo
+  participant PromptBuilder
+  participant Ollama
+
+  User->>Webview: Send message
+  Webview->>MessageRouter: CHAT payload
+  MessageRouter->>ChatHandler: handleChat(payload)
+  ChatHandler->>ConnectionRepo: getById(connectionId)
+  ChatHandler->>OllamaRepo: getContextLength
+  ChatHandler->>RagPipeline: getChunksForChat(connectionId, userMessage, history, postThinking)
+  RagPipeline->>QueryClassifier: classify(userMessage)
+  QueryClassifier-->>RagPipeline: broad | semantic | detail
+  alt Broad schema query
+    RagPipeline->>ChunkRepo: getAllChunks(connectionId)
+  else Semantic search
+    RagPipeline->>OllamaRepo: rewriteQueryForSearch(prompt)
+    RagPipeline->>EmbeddingRepo: embed(searchQuery)
+    RagPipeline->>ChunkRepo: search(connectionId, queryEmbedding, options)
+  end
+  ChunkRepo-->>RagPipeline: chunks
+  RagPipeline-->>ChatHandler: chunks, searchMs, searchQuery
+  opt Detail request
+    ChatHandler->>RagPipeline: resolveReferredChunksForDetail
+    RagPipeline->>ChunkRepo: findByName as needed
+  end
+  ChatHandler->>PromptBuilder: buildRagSystemPrompt(chunks, databaseName)
+  ChatHandler->>RagPipeline: buildInitialHistoryForApi
+  ChatHandler->>RagPipeline: applySummarizationIfNeeded
+  RagPipeline->>OllamaRepo: summarizeConversation (when near context limit)
+  ChatHandler->>RagPipeline: streamChatAndFinish
+  RagPipeline->>OllamaRepo: chat(systemPrompt, historyForApi, userMessage, onToken)
+  OllamaRepo->>Ollama: POST /api/chat stream
+  Ollama-->>OllamaRepo: tokens
+  OllamaRepo-->>RagPipeline: onToken
+  RagPipeline->>Webview: CHAT_CHUNK, CHAT_THINKING, CHAT_DONE
+  Webview->>User: Streamed answer + thinking steps

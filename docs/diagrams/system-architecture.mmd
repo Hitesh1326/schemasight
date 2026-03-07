@@ -1,0 +1,49 @@
+flowchart TB
+  subgraph Webview["🖥 Webview — React UI"]
+    direction LR
+    Hooks["useConnections · useChat · useOllamaStatus"]
+    UI["React UI (Sidebar · ChatPanel · Onboarding)"]
+    Hooks --> UI
+  end
+
+  subgraph Host["⚙ Extension Host — Node.js"]
+    direction TB
+
+    subgraph Routing["Message Routing"]
+      PM["PanelManager"]
+      MR["MessageRouter"]
+      H["Handlers (Connection · Crawl · Chat · Index · Ollama)"]
+      PM --> MR --> H
+    end
+
+    subgraph Services["Domain Services"]
+      RAG["RagPipelineService (retrieval · rewrite · rerank · stream)"]
+      IDX["Indexer (crawl → summarize → embed → store)"]
+    end
+
+    subgraph Repos["Repositories"]
+      CR["ConnectionRepo"]
+      SR["SchemaRepo"]
+      CHR["ChunkRepo"]
+      OR["OllamaRepo"]
+      ER["EmbeddingRepo"]
+    end
+
+    subgraph External["External Systems"]
+      DB[("Database — MSSQL · Postgres · MySQL")]
+      OL[("Ollama — LLM · Summarization")]
+      LDB[("LanceDB — Hybrid Search (Vector + FTS + RRF)")]
+      EMB[("Transformers.js — Embeddings")]
+    end
+
+    H --> Services
+    RAG --> Repos
+    IDX --> Repos
+    CR --> DB
+    SR --> DB
+    OR --> OL
+    ER --> EMB
+    CHR --> LDB
+  end
+
+  Webview -->|"postMessage bridge"| Host
