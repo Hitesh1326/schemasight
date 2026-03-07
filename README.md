@@ -108,57 +108,7 @@ The extension host uses **dependency injection**: `extension.ts` constructs repo
 
 ### System Architecture
 
-```mermaid
-flowchart TB
-  subgraph Webview["🖥 Webview — React UI"]
-    direction LR
-    Hooks["useConnections · useChat · useOllamaStatus"]
-    UI["React UI (Sidebar · ChatPanel · Onboarding)"]
-    Hooks --> UI
-  end
-
-  subgraph Host["⚙ Extension Host — Node.js"]
-    direction TB
-
-    subgraph Routing["Message Routing"]
-      PM["PanelManager"]
-      MR["MessageRouter"]
-      H["Handlers (Connection · Crawl · Chat · Index · Ollama)"]
-      PM --> MR --> H
-    end
-
-    subgraph Services["Domain Services"]
-      RAG["RagPipelineService (retrieval · rewrite · rerank · stream)"]
-      IDX["Indexer (crawl → summarize → embed → store)"]
-    end
-
-    subgraph Repos["Repositories"]
-      CR["ConnectionRepo"]
-      SR["SchemaRepo"]
-      CHR["ChunkRepo"]
-      OR["OllamaRepo"]
-      ER["EmbeddingRepo"]
-    end
-
-    subgraph External["External Systems"]
-      DB[("Database — MSSQL · Postgres · MySQL")]
-      OL[("Ollama — LLM · Summarization")]
-      LDB[("LanceDB — Hybrid Search (Vector + FTS + RRF)")]
-      EMB[("Transformers.js — Embeddings")]
-    end
-
-    H --> Services
-    RAG --> Repos
-    IDX --> Repos
-    CR --> DB
-    SR --> DB
-    OR --> OL
-    ER --> EMB
-    CHR --> LDB
-  end
-
-  Webview -->|"postMessage bridge"| Host
-```
+![System architecture: Webview, Extension Host, Domain Services, Repositories, External Systems](assets/system-architecture.png)
 
 User actions go from the webview over **postMessage** into the extension host, then down through handlers → services → repositories to external systems. The table above lists the components in each layer.
 
@@ -179,43 +129,7 @@ UI journey:
 
 ### Crawl And Index Flow
 
-```mermaid
-sequenceDiagram
-  participant User
-  participant Webview
-  participant MessageRouter
-  participant CrawlHandler
-  participant ConnectionRepo
-  participant SchemaRepo
-  participant Indexer
-  participant ChunkRepo
-  participant DB as DB Driver
-  participant Ollama
-  participant Embeddings as Transformers.js (EmbeddingRepo)
-
-  User->>Webview: Click Crawl
-  Webview->>MessageRouter: CRAWL_SCHEMA payload.id
-  MessageRouter->>CrawlHandler: handleCrawlSchema(connectionId)
-  CrawlHandler->>ConnectionRepo: getById, getPassword
-  ConnectionRepo-->>CrawlHandler: config, password
-  CrawlHandler->>SchemaRepo: crawl(config, password, onProgress, signal)
-  SchemaRepo->>DB: crawlSchema
-  DB-->>SchemaRepo: DatabaseSchema
-  SchemaRepo-->>CrawlHandler: DatabaseSchema
-  CrawlHandler->>Indexer: index(schema, onProgress, signal)
-  Indexer->>Indexer: buildChunksFromSchema
-  Indexer->>Ollama: summarize per chunk
-  Ollama-->>Indexer: summaries
-  Indexer->>Embeddings: embedBatch(summaries)
-  Embeddings-->>Indexer: vectors
-  Indexer->>ChunkRepo: upsertChunks(connectionId, chunks)
-  ChunkRepo->>ChunkRepo: create table, vector + FTS index
-  ChunkRepo-->>Indexer: done
-  Indexer-->>CrawlHandler: done
-  CrawlHandler->>ConnectionRepo: addCrawledConnectionId
-  CrawlHandler->>Webview: CRAWL_COMPLETE, CRAWLED_CONNECTION_IDS
-  Webview->>User: Index ready
-```
+![Crawl and index flow: User → Webview → MessageRouter → CrawlHandler → SchemaRepo → Indexer → ChunkRepo, with Ollama and Transformers.js](assets/crawl-index-flow.png)
 
 During indexing:
 
@@ -224,54 +138,7 @@ During indexing:
 
 ### Chat And RAG Flow
 
-```mermaid
-sequenceDiagram
-  participant User
-  participant Webview
-  participant MessageRouter
-  participant ChatHandler
-  participant RagPipeline
-  participant QueryClassifier
-  participant ConnectionRepo
-  participant OllamaRepo
-  participant ChunkRepo
-  participant EmbeddingRepo
-  participant PromptBuilder
-  participant Ollama
-
-  User->>Webview: Send message
-  Webview->>MessageRouter: CHAT payload
-  MessageRouter->>ChatHandler: handleChat(payload)
-  ChatHandler->>ConnectionRepo: getById(connectionId)
-  ChatHandler->>OllamaRepo: getContextLength
-  ChatHandler->>RagPipeline: getChunksForChat(connectionId, userMessage, history, postThinking)
-  RagPipeline->>QueryClassifier: classify(userMessage)
-  QueryClassifier-->>RagPipeline: broad | semantic | detail
-  alt Broad schema query
-    RagPipeline->>ChunkRepo: getAllChunks(connectionId)
-  else Semantic search
-    RagPipeline->>OllamaRepo: rewriteQueryForSearch(prompt)
-    RagPipeline->>EmbeddingRepo: embed(searchQuery)
-    RagPipeline->>ChunkRepo: search(connectionId, queryEmbedding, options)
-  end
-  ChunkRepo-->>RagPipeline: chunks
-  RagPipeline-->>ChatHandler: chunks, searchMs, searchQuery
-  opt Detail request
-    ChatHandler->>RagPipeline: resolveReferredChunksForDetail
-    RagPipeline->>ChunkRepo: findByName as needed
-  end
-  ChatHandler->>PromptBuilder: buildRagSystemPrompt(chunks, databaseName)
-  ChatHandler->>RagPipeline: buildInitialHistoryForApi
-  ChatHandler->>RagPipeline: applySummarizationIfNeeded
-  RagPipeline->>OllamaRepo: summarizeConversation (when near context limit)
-  ChatHandler->>RagPipeline: streamChatAndFinish
-  RagPipeline->>OllamaRepo: chat(systemPrompt, historyForApi, userMessage, onToken)
-  OllamaRepo->>Ollama: POST /api/chat stream
-  Ollama-->>OllamaRepo: tokens
-  OllamaRepo-->>RagPipeline: onToken
-  RagPipeline->>Webview: CHAT_CHUNK, CHAT_THINKING, CHAT_DONE
-  Webview->>User: Streamed answer + thinking steps
-```
+![Chat and RAG flow: User → Webview → ChatHandler → RagPipeline (QueryClassifier, ChunkRepo, EmbeddingRepo, OllamaRepo) → streamed response](assets/chat-rag-flow.png)
 
 At a high level:
 
